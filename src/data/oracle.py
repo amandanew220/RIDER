@@ -117,6 +117,7 @@ class AlphaFold3Oracle(BaseOracle):
 
         env = os.environ.copy()
         env["CUDA_VISIBLE_DEVICES"] = str(self.gpu_id)
+        env["APPTAINERENV_CUDA_VISIBLE_DEVICES"] = str(self.gpu_id)
 
 
         # run via apptainer
