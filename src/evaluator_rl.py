@@ -19,7 +19,7 @@ from src.constants import NUM_TO_LETTER, PROJECT_PATH, RMSD_THRESHOLD, TM_THRESH
 
 
 def evaluate(
-    rhofold,
+    oracle,
     dataset,
     raw_data,
     pred_seq,
@@ -28,7 +28,7 @@ def evaluate(
     save_designs=False,
     parallel_id=None,
 ):
-    """Evaluate a predicted sequence with RhoFold-based tertiary metrics."""
+    """Evaluate a predicted sequence with oracle-based tertiary metrics."""
     current_datetime = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     results = {"samples_list": []}
 
@@ -43,11 +43,11 @@ def evaluate(
         except AttributeError:
             output_dir = os.path.join(PROJECT_PATH, f"designs_eval/{current_datetime}/sample0/")
 
-        sc_score_rmsd, sc_score_tm, sc_score_gdt = self_consistency_score_rhofold(
+        sc_score_rmsd, sc_score_tm, sc_score_gdt = self_consistency_score_oracle(
             samples.cpu().numpy(),
             raw_data,
             mask_coords,
-            rhofold,
+            oracle,
             output_dir,
             save_designs=save_designs,
             parallel_id=parallel_id,
@@ -63,11 +63,11 @@ def evaluate(
     return results
 
 
-def self_consistency_score_rhofold(
+def self_consistency_score_oracle(
     samples,
     true_raw_data,
     mask_coords,
-    rhofold,
+    oracle,
     output_dir,
     num_to_letter=NUM_TO_LETTER,
     save_designs=False,
@@ -75,7 +75,7 @@ def self_consistency_score_rhofold(
     use_relax=False,
     parallel_id=None,
 ):
-    """Compute RMSD/TM/GDT between RhoFold predictions and the reference structure."""
+    """Compute RMSD/TM/GDT between oracle predictions and the reference structure."""
     os.makedirs(output_dir, exist_ok=True)
 
     input_seq = SeqRecord(Seq(true_raw_data["sequence"]), id="input_sequence,", description="input_sequence")
@@ -88,25 +88,16 @@ def self_consistency_score_rhofold(
     for seq in samples:
         idx = (parallel_id + 1) if parallel_id is not None else 0
 
+        sequence_str = "".join([num_to_letter[num] for num in seq])
+
         seq = SeqRecord(
-            Seq("".join([num_to_letter[num] for num in seq])),
+            Seq(sequence_str),
             id=f"sample={idx},",
             description=f"sample={idx}",
         )
         sequences.append(seq)
-        design_fasta_path = os.path.join(output_dir, f"design{idx}.fasta")
-        SeqIO.write(seq, design_fasta_path, "fasta")
 
-        design_pdb_path = os.path.join(output_dir, f"design{idx}.pdb")
-        rhofold.predict(design_fasta_path, design_pdb_path, use_relax)
-
-        _, coords, _, _ = pdb_to_tensor(
-            design_pdb_path,
-            return_sec_struct=False,
-            return_sasa=False,
-            keep_insertions=False,
-        )
-        coords = get_c4p_coords(coords)
+        coords = oracle.fold(sequence_str, output_dir, idx)
         coords = coords - coords.mean(dim=0)
 
         if coords.shape[0] == mask_coords.shape[0]:
@@ -126,15 +117,13 @@ def self_consistency_score_rhofold(
         sc_tms.append(get_tmscore(coords, ref))
         sc_gddts.append(get_gddt(coords, ref))
 
-        if os.path.exists(design_fasta_path):
-            os.unlink(design_fasta_path)
-        if not save_pdbs and os.path.exists(design_pdb_path):
-            os.unlink(design_pdb_path)
-
     if save_designs:
         SeqIO.write(sequences, os.path.join(output_dir, "all_designs.fasta"), "fasta")
     elif os.path.exists(output_dir):
-        shutil.rmtree(output_dir)
+        try:
+            shutil.rmtree(output_dir)
+        except OSError:
+            pass
 
     return np.array(sc_rmsds), np.array(sc_tms), np.array(sc_gddts)
 

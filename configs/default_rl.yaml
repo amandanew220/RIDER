@@ -1,11 +1,18 @@
 # Diffusion RL fine-tuning config (trainer_dm_rl.py)
 
+oracle:
+  value: "alphafold3"
+  desc: Folding oracle - rhofold, alphafold3, drfold2, trrosettarna
+
 # Runtime
 gpu:
   value: 0
   desc: GPU index
+af3_gpu:
+  value: 1
+  desc: GPU index used by AlphaFold3
 seed:
-  value: 0
+  value: 3
   desc: Random seed
 save:
   value: true
@@ -65,7 +72,7 @@ time_cond:
 
 # RL optimization
 epochs:
-  value: 3000
+  value: 80
   desc: RL epochs
 lr:
   value: 0.00005
@@ -139,3 +146,29 @@ eps:
 # drop_struct:
 #   value: -1.0
 #   desc: Not used in current GVPDiff
+
+af3_sif_path:
+  value: "/home/anew/scratch/alphafold3.sif"
+  desc: Path to AlphaFold3 Apptainer image
+
+af3_weights_path:
+  value: "/home/anew/scratch/af3_weights"
+  desc: Path to AlphaFold3 model weights directory
+
+af3_output_dir:
+  value: "/home/anew/scratch/af3_output"
+  desc: Base output directory for AlphaFold3 predictions
+
+drfold2_dir:
+  value: "/home/anew/scratch/DRfold2"
+  desc: Path to DRfold2 repository
+
+drfold2_python:
+  value: "/home/anew/drfold2_env/bin/python"
+  desc: Path to DRfold2 virtualenv python
+
+
+
+oracle_address_file:
+  value: "/home/anew/scratch/oracle_server_address.txt"
+  desc: Path to file containing oracle server address

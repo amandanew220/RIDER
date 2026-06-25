@@ -28,8 +28,7 @@ from src.evaluator_rl import evaluate
 from src.model import GVPDiff
 from src.noise_schedule import NoiseScheduleVP
 from src.diffusion import ddim_sample_with_logprob
-from tools.rhofold.config import rhofold_config
-from tools.rhofold.rf import RhoFold
+from src.data.oracle import get_oracle
 
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=RuntimeWarning)
@@ -158,11 +157,11 @@ def set_seed(seed=0):
         torch.backends.cudnn.benchmark = False
 
 
-def reward_fn(rhofold, dataset, raw_data, pred_seq, device, parallel_id=None):
+def reward_fn(oracle, dataset, raw_data, pred_seq, device, parallel_id=None):
     """Compute downstream reward using structural evaluation metrics."""
 
     results = evaluate(
-        rhofold,
+        oracle,
         dataset,
         raw_data,
         pred_seq,
@@ -188,7 +187,7 @@ def sample_once(
     raw_data,
     dataset,
     model,
-    rhofold,
+    oracle,
     noise_scheduler,
     config,
     autocast,
@@ -214,7 +213,7 @@ def sample_once(
     pred_seq = torch.argmax(x0_pred, dim=-1)
 
     reward, score_gddt, score_tm, score_rmsd = reward_fn(
-        rhofold,
+        oracle,
         dataset,
         raw_data,
         pred_seq,
@@ -231,7 +230,7 @@ def sample_once(
     return trajectory, score_gddt, score_tm, score_rmsd
 
 
-def collect_parallel_samples(raw_data, dataset, model, rhofold, noise_scheduler, config, autocast, device):
+def collect_parallel_samples(raw_data, dataset, model, oracle, noise_scheduler, config, autocast, device):
     """Launch additional sampling tasks in parallel to diversify exploration."""
 
     n_parallel_rollouts = max(config.rollouts_per_round - 1, 0)
@@ -246,7 +245,7 @@ def collect_parallel_samples(raw_data, dataset, model, rhofold, noise_scheduler,
                 raw_data,
                 dataset,
                 model,
-                rhofold,
+                oracle,
                 noise_scheduler,
                 config,
                 autocast,
@@ -268,13 +267,17 @@ def train_diffusion_rl(config, model, dataset, device, accelerator, optimizer):
     autocast = accelerator.autocast
     clip_range = config.clip_range
 
-    device_rho = torch.device("cuda")
+    device_rho = torch.device("cuda:0")
+    '''
     rhofold = RhoFold(rhofold_config, device_rho)
     rhofold_path = os.path.join(PROJECT_PATH, "tools/rhofold/model_20221010_params.pt")
     print(f"Loading RhoFold checkpoint: {rhofold_path}")
     rhofold.load_state_dict(torch.load(rhofold_path, map_location=torch.device("cpu"))["model"])
     rhofold = rhofold.to(device_rho)
     rhofold.eval()
+    '''
+    oracle = get_oracle(config.oracle, config)
+
 
     noise_scheduler = NoiseScheduleVP(
         config.sde_schedule,
@@ -308,7 +311,7 @@ def train_diffusion_rl(config, model, dataset, device, accelerator, optimizer):
                     raw_data_fixed,
                     dataset,
                     model,
-                    rhofold,
+                    oracle,
                     noise_scheduler,
                     config,
                     autocast,
@@ -327,7 +330,7 @@ def train_diffusion_rl(config, model, dataset, device, accelerator, optimizer):
                 )
 
                 extra_samples = collect_parallel_samples(
-                    raw_data_fixed, dataset, model, rhofold, noise_scheduler, config, autocast, device
+                    raw_data_fixed, dataset, model, oracle, noise_scheduler, config, autocast, device
                 )
                 sampled_data.extend(extra_samples)
 
