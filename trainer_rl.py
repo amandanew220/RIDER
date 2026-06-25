@@ -238,7 +238,7 @@ def collect_parallel_samples(raw_data, dataset, model, oracle, noise_scheduler, 
         return []
 
     samples = []
-    with ThreadPoolExecutor(max_workers=n_parallel_rollouts) as executor:
+    with ThreadPoolExecutor(max_workers=1) as executor:
         futures = [
             executor.submit(
                 sample_once,

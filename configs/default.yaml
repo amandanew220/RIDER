@@ -8,7 +8,7 @@ seed:
   value: 0
   desc: Random seed
 use_wandb:
-  value: false
+  value: true
   desc: Enable Weights & Biases logging for inference
 save:
   value: true
@@ -74,10 +74,10 @@ time_cond:
 
 # Optimization
 epochs:
-  value: 150
+  value: 30
   desc: Training epochs
 lr:
-  value: 0.0001
+  value: 0.00005
   desc: Learning rate
 val_every:
   value: 30
@@ -99,25 +99,25 @@ continuous_beta_1:
   value: 20.0
   desc: SDE beta end
 n_steps:
-  value: 50
+  value: 30
   desc: DDIM steps for sampling
 eps:
   value: 0.001
   desc: Minimum diffusion time
 eval_all_test:
-  value: false
+  value: true
   desc: If true, evaluate all test samples
 sample_repeats:
   value: 16
   desc: Number of repeated samplings per sample
 temperature:
-  value: 0.5
+  value: 0.1
   desc: Sampling temperature (used when deterministic=false)
 deterministic:
   value: false
   desc: Deterministic DDIM sampling switch
 test_id:
-  value: 50
+  value: -1
   desc: Evaluate one test sample by index; set -1 to disable
 test_pdb_id:
   value: ""
