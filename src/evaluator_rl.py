@@ -1,3 +1,13 @@
+# NOTICE: This file has been modified from the original RIDER codebase
+# (https://github.com/COLA-Laboratory/RIDER) as part of research
+# conducted at Trinity Western University (2026), under the Apache
+# License, Version 2.0.
+#
+# Modifications: structural evaluation (evaluate(),
+# self_consistency_score_*) generalized to work with either oracle
+# (RhoFold or AlphaFold3) via the common oracle interface, rather than
+# calling RhoFold directly.
+
 import os
 import shutil
 from datetime import datetime

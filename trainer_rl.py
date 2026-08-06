@@ -1,3 +1,14 @@
+
+# NOTICE: This file has been modified from the original RIDER codebase
+# (https://github.com/COLA-Laboratory/RIDER) as part of research
+# conducted at Trinity Western University (2026), under the Apache
+# License, Version 2.0.
+#
+# Modifications: reward computation (reward_fn, sample_once) updated to
+# accept a swappable oracle object rather than a hardcoded RhoFold
+# instance, enabling the RhoFold-vs-AlphaFold3 oracle comparison
+# described in the accompanying paper.
+
 """Reinforcement learning fine-tuning loop for the diffusion model."""
 
 import argparse
