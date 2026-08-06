@@ -1,5 +1,12 @@
 # Diffusion RL fine-tuning config (trainer_dm_rl.py)
 
+lambda_ss:
+  value: 0
+ss_bonus_scale:
+  value: 0
+ss_probe_epochs:
+  value: 5
+
 # Runtime
 gpu:
   value: 0
@@ -65,7 +72,7 @@ time_cond:
 
 # RL optimization
 epochs:
-  value: 3000
+  value: 80
   desc: RL epochs
 lr:
   value: 0.00005
@@ -106,7 +113,7 @@ rollouts_per_round:
   value: 10
   desc: Rollouts collected per sampling round
 sample_index:
-  value: 20
+  value: 0
   desc: Fixed dataset index used for RL optimization
 
 # Diffusion schedule

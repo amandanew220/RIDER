@@ -30,6 +30,9 @@ from src.noise_schedule import NoiseScheduleVP
 from src.diffusion import ddim_sample_with_logprob
 from tools.rhofold.config import rhofold_config
 from tools.rhofold.rf import RhoFold
+from tools.rhofold.secondary_structure_reward import compute_r_ss, dotbracket_to_pairs, filter_intrachain_pairs
+
+
 
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=RuntimeWarning)
@@ -90,6 +93,26 @@ def _load_model_checkpoint(model: torch.nn.Module, checkpoint_path: str, device:
     if unexpected_keys:
         logger.warning("Unexpected checkpoint keys (first 10): %s", unexpected_keys[:10])
 
+
+def compute_adaptive_bonus_scale(ema_nonzero_frac: float, base_scale: float,
+                                  target_frac: float = 0.15) -> float:
+    """
+    Scales base_scale down linearly as ema_nonzero_frac approaches
+    target_frac, clamped to [0, base_scale].
+ 
+    ema_nonzero_frac=0.0   -> returns base_scale (full strength, dead/near-dead regime)
+    ema_nonzero_frac>=target_frac -> returns 0.0 (bonus tapered off, working regime)
+ 
+    target_frac=0.15 is a starting guess -- 2GCS's observed nonzero_frac
+    climbed well above this once the bonus unlocked it; 2GDI's baseline
+    (89.58%) is far above it. Adjust based on where the "already working"
+    boundary actually sits once more targets are characterized.
+    """
+    if target_frac <= 0:
+        return base_scale
+    factor = 1.0 - (ema_nonzero_frac / target_frac)
+    factor = max(0.0, min(1.0, factor))
+    return base_scale * factor
 
 def _update_baseline(previous: float, mean_reward: float, epoch: int, beta: float) -> float:
     """EMA-style baseline update used to stabilize policy gradient."""
@@ -158,9 +181,22 @@ def set_seed(seed=0):
         torch.backends.cudnn.benchmark = False
 
 
-def reward_fn(rhofold, dataset, raw_data, pred_seq, device, parallel_id=None):
-    """Compute downstream reward using structural evaluation metrics."""
-
+def reward_fn(rhofold, dataset, raw_data, pred_seq, device, parallel_id=None,
+              target_pairs=None, lambda_ss=0.0, ss_bonus_scale=0.0,
+              ss_bonus_pair_cap=7):
+    """Compute downstream reward using structural evaluation metrics.
+ 
+    target_pairs: precomputed set of (i, j) target base pairs.
+    lambda_ss: weight for the R_SS (F1) term. 0.0 disables it.
+    ss_bonus_scale: weight for a raw correct-pair-COUNT bonus, applied
+                    whenever at least one predicted pair matches a target
+                    pair (tp > 0). 0.0 disables it. Unlike lambda_ss *
+                    R_SS, this fires on partial credit even when overall
+                    F1 rounds to a value PPO can't yet distinguish from
+                    zero-overlap cases.
+    """
+    use_ss = (lambda_ss > 0 or ss_bonus_scale > 0) and target_pairs is not None
+ 
     results = evaluate(
         rhofold,
         dataset,
@@ -169,36 +205,46 @@ def reward_fn(rhofold, dataset, raw_data, pred_seq, device, parallel_id=None):
         1,
         device=device,
         parallel_id=parallel_id,
+        return_ss=use_ss,
     )
     score_gddt = results['sc_score_gddt'][0]
     score_tm = results['sc_score_tm'][0]
     score_rmsd = results['sc_score_rmsd'][0]
-
+ 
     reward = -(score_rmsd * 0.5) ** 2 + (score_gddt * 5) ** 2
-
+ 
     if score_gddt > 0.45:
         reward += (score_gddt - 0.45) * 100
     elif score_rmsd < 3:
         reward += (3 - score_rmsd) * 20
-
-    return reward, score_gddt, score_tm, score_rmsd
-
+ 
+    score_ss = None
+    n_correct_pairs = None
+    if use_ss:
+        ss_logits = results["ss_logits_list"][0]
+        r_ss_result = compute_r_ss(ss_logits, target_pairs=target_pairs)
+        score_ss = r_ss_result["f1"]
+        n_correct_pairs = r_ss_result["tp"]
+ 
+        if lambda_ss > 0:
+            reward = reward + lambda_ss * score_ss
+ 
+        # partial-credit bonus: fires on ANY correct pair, independent
+        # of overall F1 -- this is what's supposed to break the
+        # zero-variance trap that scaling lambda_ss alone couldn't fix
+        if ss_bonus_scale > 0 and n_correct_pairs > 0:
+            capped_pairs = min(n_correct_pairs, ss_bonus_pair_cap)
+            reward += capped_pairs * ss_bonus_scale
+ 
+    return reward, score_gddt, score_tm, score_rmsd, score_ss, n_correct_pairs
 
 def sample_once(
-    raw_data,
-    dataset,
-    model,
-    rhofold,
-    noise_scheduler,
-    config,
-    autocast,
-    device,
-    parallel_id=None,
-    deterministic=False,
-    temperature=None,
-):
+    raw_data, dataset, model, rhofold, noise_scheduler, config, autocast,
+    device, parallel_id=None, deterministic=False, temperature=None,
+    target_pairs=None, lambda_ss=0.0, ss_bonus_scale=0.0, ss_bonus_pair_cap=7,
+    ):
     """Generate a single trajectory sample and return it with reward statistics."""
-
+ 
     data = dataset.featurizer(raw_data).to(device)
     sample_temperature = config.temperature if temperature is None else temperature
     with autocast():
@@ -212,15 +258,17 @@ def sample_once(
             deterministic=deterministic,
         )
     pred_seq = torch.argmax(x0_pred, dim=-1)
-
-    reward, score_gddt, score_tm, score_rmsd = reward_fn(
-        rhofold,
-        dataset,
-        raw_data,
-        pred_seq,
-        device=device,
-        parallel_id=parallel_id,
+ 
+    reward, score_gddt, score_tm, score_rmsd, score_ss, n_correct_pairs = reward_fn(
+        rhofold, dataset, raw_data, pred_seq, device=device,
+        parallel_id=parallel_id, target_pairs=target_pairs,
+        lambda_ss=lambda_ss, ss_bonus_scale=ss_bonus_scale,
+        ss_bonus_pair_cap=ss_bonus_pair_cap,
     )
+    
+    if n_correct_pairs is not None and n_correct_pairs > 0:
+        print(f"[NONZERO] parallel_id={parallel_id}, n_correct_pairs={n_correct_pairs}, "
+              f"score_ss={score_ss:.3f}")
 
     trajectory = TrajectorySample(
         log_probs_traj=log_probs_traj,
@@ -228,38 +276,44 @@ def sample_once(
         reward=reward,
         raw_data=raw_data,
     )
-    return trajectory, score_gddt, score_tm, score_rmsd
+    return trajectory, score_gddt, score_tm, score_rmsd, score_ss, n_correct_pairs
 
 
-def collect_parallel_samples(raw_data, dataset, model, rhofold, noise_scheduler, config, autocast, device):
-    """Launch additional sampling tasks in parallel to diversify exploration."""
-
+def collect_parallel_samples(raw_data, dataset, model, rhofold, noise_scheduler,
+                              config, autocast, device, target_pairs=None,
+                              lambda_ss=0.0, ss_bonus_scale=0.0, ss_bonus_pair_cap=7):
+    """Launch additional sampling tasks in parallel to diversify exploration.
+ 
+    Returns (samples, n_correct_pairs_list).
+    """
     n_parallel_rollouts = max(config.rollouts_per_round - 1, 0)
     if n_parallel_rollouts == 0:
-        return []
-
+        return [], []
+ 
     samples = []
+    n_correct_pairs_list = []
     with ThreadPoolExecutor(max_workers=n_parallel_rollouts) as executor:
         futures = [
             executor.submit(
                 sample_once,
-                raw_data,
-                dataset,
-                model,
-                rhofold,
-                noise_scheduler,
-                config,
-                autocast,
-                device,
+                raw_data, dataset, model, rhofold, noise_scheduler, config,
+                autocast, device,
                 parallel_id=parallel_id,
                 deterministic=config.deterministic,
+                target_pairs=target_pairs,
+                lambda_ss=lambda_ss,
+                ss_bonus_scale=ss_bonus_scale,
+                ss_bonus_pair_cap=ss_bonus_pair_cap,
             )
             for parallel_id in range(n_parallel_rollouts)
         ]
         for future in as_completed(futures):
-            sample, _, _, _ = future.result()
+            sample, _, _, _, _, n_correct_pairs = future.result()
             samples.append(sample)
-    return samples
+            if n_correct_pairs is not None:
+                n_correct_pairs_list.append(n_correct_pairs)
+    return samples, n_correct_pairs_list
+ 
 
 
 def train_diffusion_rl(config, model, dataset, device, accelerator, optimizer):
@@ -294,17 +348,58 @@ def train_diffusion_rl(config, model, dataset, device, accelerator, optimizer):
         raise ValueError("RL dataset is empty after preprocessing.")
     sample_index = int(config.sample_index) % len(dataset.data_list)
     raw_data_fixed = dataset.data_list[sample_index]
+    lambda_ss = float(getattr(config, 'lambda_ss', 0.0))
+    ss_bonus_scale = float(getattr(config, 'ss_bonus_scale', 0.0))
+    if ss_bonus_scale > 0:
+        print(f"SS bonus enabled: ss_bonus_scale={ss_bonus_scale}")
+    MULTI_CHAIN_TARGETS = {"1XPE", "1CSL", "1LNT", "354D", "1Q9A", "1X9C"}
+
+    target_pairs = None
+    if lambda_ss > 0 or ss_bonus_scale > 0:
+        target_name = getattr(config, 'target_name', None)
+        raw_pairs = dotbracket_to_pairs(raw_data_fixed['sec_struct_list'][0])
+
+        if target_name in MULTI_CHAIN_TARGETS:
+            target_pairs = filter_intrachain_pairs(
+                raw_pairs, len(raw_data_fixed['sequence'])
+            )
+        else:
+            target_pairs = raw_pairs
+
+        print(f"R_SS enabled: lambda_ss={lambda_ss}, ss_bonus_scale={ss_bonus_scale}, "
+              f"{len(target_pairs)} target base pairs loaded"
+              + (" (intra-chain filtered)" if target_name in MULTI_CHAIN_TARGETS else ""))
+
+    base_ss_bonus_scale = ss_bonus_scale
+    ema_nonzero_frac = 0.0
+    ema_beta_ss = 0.8
+    target_nonzero_frac = float(getattr(config, 'ss_target_nonzero_frac', 0.15))
+    ss_probe_epochs = int(getattr(config, 'ss_probe_epochs', 5))
+    ss_bonus_pair_cap = int(getattr(config, 'ss_bonus_pair_cap', 7))
+
 
     for epoch in range(config.epochs):
         model.eval()
         print(f"Sample epoch: {epoch}")
-
+ 
+        if epoch < ss_probe_epochs:
+            effective_ss_bonus_scale = 0.0
+            print(f"  [ADAPTIVE] Probe epoch {epoch}/{ss_probe_epochs} -- "
+                  f"measuring only, bonus forced to 0.0")
+        else:
+            effective_ss_bonus_scale = compute_adaptive_bonus_scale(
+                ema_nonzero_frac, base_ss_bonus_scale, target_nonzero_frac
+            )
+            print(f"  [ADAPTIVE] ema_nonzero_frac={ema_nonzero_frac:.3f}, "
+                  f"effective_ss_bonus_scale={effective_ss_bonus_scale:.2f}")
+ 
         sampled_data: List[TrajectorySample] = []
+        epoch_n_correct_pairs: List[int] = []
         target_samples = int(config.target_samples_per_epoch)
         with tqdm(total=target_samples, desc=f"Epoch {epoch} Sampling", leave=False) as pbar:
             while len(sampled_data) < target_samples:
                 # Anchor each round with one deterministic rollout, then expand with stochastic ones.
-                deterministic_sample, score_gddt, score_tm, score_rmsd = sample_once(
+                deterministic_sample, score_gddt, score_tm, score_rmsd, score_ss, n_correct_pairs = sample_once(
                     raw_data_fixed,
                     dataset,
                     model,
@@ -315,28 +410,50 @@ def train_diffusion_rl(config, model, dataset, device, accelerator, optimizer):
                     device,
                     deterministic=True,
                     temperature=0.0,
+                    target_pairs=target_pairs,
+                    lambda_ss=lambda_ss,
+                    ss_bonus_scale=effective_ss_bonus_scale,
+                    ss_bonus_pair_cap=ss_bonus_pair_cap
                 )
                 sampled_data.append(deterministic_sample)
-                wandb.log(
-                    {
-                        "Test/reward": deterministic_sample.reward,
-                        "Test/score_gddt": score_gddt,
-                        "Test/score_tm": score_tm,
-                        "Test/score_rmsd": score_rmsd,
-                    }
-                )
-
-                extra_samples = collect_parallel_samples(
-                    raw_data_fixed, dataset, model, rhofold, noise_scheduler, config, autocast, device
+                if n_correct_pairs is not None:
+                    epoch_n_correct_pairs.append(n_correct_pairs)
+ 
+                log_dict = {
+                    "Test/reward": deterministic_sample.reward,
+                    "Test/score_gddt": score_gddt,
+                    "Test/score_tm": score_tm,
+                    "Test/score_rmsd": score_rmsd,
+                }
+                if score_ss is not None:
+                    log_dict["Test/score_ss"] = score_ss
+                    log_dict["Test/n_correct_pairs"] = n_correct_pairs
+                    log_dict["Test/effective_ss_bonus_scale"] = effective_ss_bonus_scale
+                wandb.log(log_dict)
+ 
+                extra_samples, extra_n_correct_pairs = collect_parallel_samples(
+                    raw_data_fixed, dataset, model, rhofold, noise_scheduler, config,
+                    autocast, device, target_pairs=target_pairs, lambda_ss=lambda_ss,
+                    ss_bonus_scale=effective_ss_bonus_scale, ss_bonus_pair_cap=ss_bonus_pair_cap
                 )
                 sampled_data.extend(extra_samples)
-
+                epoch_n_correct_pairs.extend(extra_n_correct_pairs)
+ 
                 current_count = min(len(sampled_data), target_samples)
                 pbar.n = current_count
                 if sampled_data:
                     recent_rewards = [s.reward for s in sampled_data[:current_count]]
                     pbar.set_postfix(avg_reward=f"{np.mean(recent_rewards):.3f}")
                 pbar.refresh()
+ 
+        if epoch_n_correct_pairs:
+            epoch_nonzero_frac = sum(1 for n in epoch_n_correct_pairs if n > 0) / len(epoch_n_correct_pairs)
+            if epoch == 0:
+                ema_nonzero_frac = epoch_nonzero_frac
+            else:
+                ema_nonzero_frac = ema_beta_ss * ema_nonzero_frac + (1 - ema_beta_ss) * epoch_nonzero_frac
+            wandb.log({"Test/epoch_nonzero_frac": epoch_nonzero_frac,
+                       "Test/ema_nonzero_frac": ema_nonzero_frac, "epoch": epoch})
 
         sampled_data = sampled_data[:target_samples]
         rewards = [sample.reward for sample in sampled_data]
