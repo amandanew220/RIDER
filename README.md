@@ -1,3 +1,38 @@
+## Fork Overview
+
+This is a fork of [RIDER](https://github.com/COLA-Laboratory/RIDER)
+(Hu et al., ICLR 2026), modified for RNA folding oracle comparison
+research at Trinity Western University (NSERC USRA, 2026), under the
+supervision of Prof. Herbert Tsang. This branch (ss-reward-extension) contains the code for "Secondary-Structure Reward Shaping for RL-Based RNA Inverse Design." Licensed under Apache License 2.0, same as upstream.
+
+This branch is based directly on main (unmodified upstream RIDER), not on the oracle-comparison branch, RhoFold is the sole folding oracle used throughout; the oracle-swapping abstraction from the companion oracle-comparison paper is not part of this branch.
+
+
+### What's Changed From Upstream 
+
+- `tools/rhofold/secondary_structure_reward.py` (new): implements the secondary-structure reward term (R_SS, base-pair F1 decoded from RhoFold's ss_head output via Nussinov-style dynamic programming), the partial-credit bonus term, adaptive bonus scaling, and intra-chain pair filtering for multi-chain benchmark targets.
+- `trainer_rl.py`: RL fine-tuning loop extended with the secondary- structure reward. New config-driven parameters: lambda_ss, ss_bonus_scale, ss_probe_epochs, ss_target_nonzero_frac, ss_bonus_pair_cap, target_name. Adds a measurement-only probe period at the start of each run, followed by adaptive bonus scaling based on the observed fraction of sequences per epoch with at least one correct base pair.
+- `src/evaluator_rl.py`: structural evaluation extended with an opt-in return_ss flag, capturing RhoFold's secondary-structure prediction from the same forward pass used for tertiary (RMSD/GDT_TS) scoring, rather than a separate fold.
+
+See individual file headers for detailed modification notices (Apache
+2.0 §4b).
+
+### Reproducing the Oracle Comparison
+
+1. Obtain the RhoFold checkpoint (`model_20221010_params.pt`) from the
+   [original RhoFold repository](https://github.com/ml4bio/RhoFold) and
+   place it at `tools/rhofold/model_20221010_params.pt`.
+2. In `configs/default_rl.yaml`, set sample_index to select a target structure and target_name to its PDB ID (required for multi-chain intra-chain filtering to activate correctly, see below).
+3. Set lambda_ss and ss_bonus_scale to enable the reward extension (both default to 0.0, fully inert, reproducing plain RIDER behaviour if left unset).
+4. Set `oracle: rhofold` or `oracle: alphafold3` in the config to
+   select which oracle a given run uses.
+5. Launch training: `python trainer_rl.py --config configs/default_rl.yaml`
+
+
+**Note:** the pre-trained (non-RL-fine-tuned) RIDE checkpoint referenced
+by `model_path` in the config is not included in this repository; see
+upstream RIDER for pre-training instructions.
+
 # RIDER: 3D RNA Inverse Design with Reinforcement Learning–Guided Diffusion
 
 RIDER is an **RNA tertiary-structure inverse design** framework that combines generative diffusion models with reinforcement learning. By directly optimizing structural consistency during fine-tuning, RIDER significantly improves the structural fidelity of designed RNA sequences, making them more likely to fold into the intended 3D structures.
