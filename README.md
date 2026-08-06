@@ -1,3 +1,50 @@
+## Fork Overview
+
+This is a fork of [RIDER](https://github.com/COLA-Laboratory/RIDER)
+(Hu et al., ICLR 2026), modified for RNA folding oracle comparison
+research at Trinity Western University (NSERC USRA, 2026), under the
+supervision of Prof. Herbert Tsang. This branch (`oracle-comparison`)
+contains the code for *"Oracle Selection in Reinforcement
+Learning-Based RNA Inverse Design."* Licensed under Apache License 2.0,
+same as upstream.
+
+### What's Changed From Upstream 
+
+- `src/data/oracle.py` (new): a common `BaseOracle` interface with
+  `RhoFoldOracle` and `AlphaFold3Oracle` implementations, allowing the
+  RL loop to treat the folding oracle as swappable via
+  `get_oracle(oracle_type, config)`.
+- `trainer_rl.py`: reward computation (`reward_fn`, `sample_once`)
+  updated to accept a generic oracle object rather than a hardcoded
+  RhoFold instance.
+- `src/evaluator_rl.py`: structural evaluation (`evaluate()`,
+  `self_consistency_score_oracle()`) generalized to work with either
+  oracle via the common interface.
+
+See individual file headers for detailed modification notices (Apache
+2.0 §4b).
+
+### Reproducing the Oracle Comparison
+
+1. Obtain the RhoFold checkpoint (`model_20221010_params.pt`) from the
+   [original RhoFold repository](https://github.com/ml4bio/RhoFold) and
+   place it at `tools/rhofold/model_20221010_params.pt`.
+2. Obtain an AlphaFold3 Apptainer image and model weights (see
+   [AlphaFold3's usage terms](https://github.com/google-deepmind/alphafold3)
+   - weights are not redistributed here).
+3. Edit `configs/default_rl.yaml`, filling in `af3_sif_path`,
+   `af3_weights_path`, and `af3_output_dir` for your environment.
+4. Set `oracle: rhofold` or `oracle: alphafold3` in the config to
+   select which oracle a given run uses.
+5. Launch training: `python trainer_rl.py --config configs/default_rl.yaml`
+
+**Note:** the pre-trained (non-RL-fine-tuned) RIDE checkpoint referenced
+by `model_path` in the config is not included in this repository; see
+upstream RIDER for pre-training instructions.
+
+
+
+
 # RIDER: 3D RNA Inverse Design with Reinforcement Learning–Guided Diffusion
 
 RIDER is an **RNA tertiary-structure inverse design** framework that combines generative diffusion models with reinforcement learning. By directly optimizing structural consistency during fine-tuning, RIDER significantly improves the structural fidelity of designed RNA sequences, making them more likely to fold into the intended 3D structures.
