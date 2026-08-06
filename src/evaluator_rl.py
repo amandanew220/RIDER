@@ -1,3 +1,13 @@
+# NOTICE: This file has been modified from the original RIDER codebase
+# (https://github.com/COLA-Laboratory/RIDER) as part of research
+# conducted at Trinity Western University (2026), under the Apache
+# License, Version 2.0.
+#
+# Modifications: structural evaluation extended with an opt-in
+# return_ss flag, capturing RhoFold's secondary-structure (ss_head)
+# prediction from the same forward pass used for tertiary (RMSD/GDT_TS)
+# scoring, rather than discarding it via a separate predict() call.
+
 import os
 import shutil
 from datetime import datetime

@@ -1,3 +1,17 @@
+# NOTICE: This file has been modified from the original RIDER codebase
+# (https://github.com/COLA-Laboratory/RIDER) as part of research
+# conducted at Trinity Western University (2026), under the Apache
+# License, Version 2.0.
+#
+# Modifications: RL fine-tuning loop extended with a secondary-structure
+# reward term (lambda_ss, ss_bonus_scale) decoded from RhoFold's
+# ss_head output, including a measurement-only probe period and
+# adaptive bonus scaling (compute_adaptive_bonus_scale) based on
+# observed per-epoch base-pair recovery, and automatic intra-chain
+# pair filtering for multi-chain benchmark targets (MULTI_CHAIN_TARGETS).
+# RhoFold remains the sole folding oracle on this branch.
+
+
 """Reinforcement learning fine-tuning loop for the diffusion model."""
 
 import argparse

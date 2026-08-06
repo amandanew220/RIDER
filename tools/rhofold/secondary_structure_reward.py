@@ -1,3 +1,16 @@
+# Copyright 2026 Amanda New, Trinity Western University
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# This file is new work added as part of research extending RIDER
+# (https://github.com/COLA-Laboratory/RIDER, Apache License 2.0) with
+# a secondary-structure reward term; it did not exist in the upstream
+# codebase.
+
 """
 secondary_structure_reward.py
 
