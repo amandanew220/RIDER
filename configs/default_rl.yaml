@@ -1,8 +1,6 @@
-# Diffusion RL fine-tuning config (trainer_dm_rl.py)
-
 oracle:
-  value: "alphafold3"
-  desc: Folding oracle - rhofold, alphafold3, drfold2, trrosettarna
+  value: "rhofold"
+  desc: Folding oracle - rhofold, alphafold3
 
 # Runtime
 gpu:
@@ -12,7 +10,7 @@ af3_gpu:
   value: 1
   desc: GPU index used by AlphaFold3
 seed:
-  value: 3
+  value: 0
   desc: Random seed
 save:
   value: true
@@ -113,7 +111,7 @@ rollouts_per_round:
   value: 10
   desc: Rollouts collected per sampling round
 sample_index:
-  value: 20
+  value: 0
   desc: Fixed dataset index used for RL optimization
 
 # Diffusion schedule
@@ -130,45 +128,16 @@ eps:
   value: 0.001
   desc: Minimum diffusion time
 
-# Unused candidates (kept for review)
-# device:
-#   value: "gpu"
-#   desc: Not used after xpu/device-branch cleanup
-# model:
-#   value: "Diff"
-#   desc: Not used; trainer_dm_rl.py always builds GVPDiff
-# val_every:
-#   value: 5
-#   desc: Not used in current RL loop
-# dihedral_angle:
-#   value: true
-#   desc: Not used in current GVPDiff
-# drop_struct:
-#   value: -1.0
-#   desc: Not used in current GVPDiff
 
 af3_sif_path:
-  value: "/home/anew/scratch/alphafold3.sif"
+  value: "<path-to-af3-apptainer-image>"
   desc: Path to AlphaFold3 Apptainer image
 
 af3_weights_path:
-  value: "/home/anew/scratch/af3_weights"
+  value: "<path-to-af3-weights>"
   desc: Path to AlphaFold3 model weights directory
 
 af3_output_dir:
-  value: "/home/anew/scratch/af3_output"
+  value: "<path-to-af3-output-dir>"
   desc: Base output directory for AlphaFold3 predictions
 
-drfold2_dir:
-  value: "/home/anew/scratch/DRfold2"
-  desc: Path to DRfold2 repository
-
-drfold2_python:
-  value: "/home/anew/drfold2_env/bin/python"
-  desc: Path to DRfold2 virtualenv python
-
-
-
-oracle_address_file:
-  value: "/home/anew/scratch/oracle_server_address.txt"
-  desc: Path to file containing oracle server address
