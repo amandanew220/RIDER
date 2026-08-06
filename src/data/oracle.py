@@ -1,12 +1,20 @@
-# fold(sequence: str) → coords: torch.Tensor
+# NOTICE: This file has been modified from the original RIDER codebase
+# (https://github.com/COLA-Laboratory/RIDER) as part of research
+# conducted at Trinity Western University (2026), under the Apache
+# License, Version 2.0.
+#
+# Modifications: added a configurable oracle interface (get_oracle())
+# supporting both RhoFold and AlphaFold3 as swappable RL reward oracles,
+# where the original codebase used RhoFold exclusively.
 
-# src/data/oracle.py
+
 
 import os
 import subprocess
 import json
 from abc import ABC, abstractmethod
 from datetime import datetime
+import shutil
 
 import torch
 from Bio import SeqIO
@@ -15,9 +23,6 @@ from Bio.SeqRecord import SeqRecord
 
 from src.data.data_utils import pdb_to_tensor, get_c4p_coords
 from src.constants import PROJECT_PATH
-
-import pickle
-import socket
 
 
 class BaseOracle(ABC):
@@ -88,7 +93,7 @@ class RhoFoldOracle(BaseOracle):
 
 
 class AlphaFold3Oracle(BaseOracle):
-    """Wrapper for AlphaFold3 running via Apptainer on Nibi."""
+    """Wrapper for AlphaFold3 running via Apptainer."""
 
     def __init__(self, sif_path, weights_path, output_base, model_seeds=None, gpu_id=1):
         self.sif_path = sif_path
@@ -149,6 +154,9 @@ class AlphaFold3Oracle(BaseOracle):
         if os.path.exists(json_path):
             os.unlink(json_path)
 
+        if os.path.exists(af3_output_dir):
+            shutil.rmtree(af3_output_dir)
+
         return coords
 
     def _cif_to_c4p_coords(self, cif_path: str) -> torch.Tensor:
@@ -173,117 +181,6 @@ class AlphaFold3Oracle(BaseOracle):
         coords = coords - coords.mean(dim=0)
         return coords
 
-
-class DRfold2Oracle(BaseOracle):
-    """Wrapper for DRfold2."""
-
-    def __init__(self, drfold2_dir: str, env_python: str):
-        self.drfold2_dir = drfold2_dir  # path to DRfold2 repo
-        self.env_python = env_python    # path to drfold2_env python
-
-    def fold(self, sequence: str, output_dir: str, idx: int = 0) -> torch.Tensor:
-        os.makedirs(output_dir, exist_ok=True)
-        fasta_path = os.path.join(output_dir, f"design{idx}.fasta")
-        pdb_output_dir = os.path.join(output_dir, f"drfold2_out_{idx}")
-
-        self._write_fasta(sequence, fasta_path, idx)
-
-        cmd = [
-            self.env_python,
-            os.path.join(self.drfold2_dir, "DRfold_infer.py"),
-            fasta_path,
-            pdb_output_dir,
-        ]
-        env = os.environ.copy()
-        env["CUDA_VISIBLE_DEVICES"] = "1"
-        subprocess.run(cmd, check=True, capture_output=False, cwd=self.drfold2_dir, env=env)
-
-        # DRfold2 writes to relax/ subdirectory
-        pdb_path = os.path.join(pdb_output_dir, "relax", "model_1.pdb")
-        if not os.path.exists(pdb_path):
-            # fall back to folds/ if relax failed
-            import glob
-            candidates = glob.glob(os.path.join(pdb_output_dir, "folds", "*.pdb"))
-            if not candidates:
-                raise FileNotFoundError(f"DRfold2 produced no PDB output in {pdb_output_dir}")
-            pdb_path = candidates[0]
-
-        coords = self._pdb_to_c4p_coords(pdb_path)
-
-        # cleanup
-        if os.path.exists(fasta_path):
-            os.unlink(fasta_path)
-
-        return coords
-
-
-class TrRosettaRNAOracle(BaseOracle):
-    """Wrapper for trRosettaRNA."""
-
-    def __init__(self, trrosetta_dir: str, env_python: str):
-        self.trrosetta_dir = trrosetta_dir
-        self.env_python = env_python
-
-    def fold(self, sequence: str, output_dir: str, idx: int = 0) -> torch.Tensor:
-        os.makedirs(output_dir, exist_ok=True)
-        fasta_path = os.path.join(output_dir, f"design{idx}.fasta")
-        pdb_output_dir = os.path.join(output_dir, f"trrosetta_out_{idx}")
-
-        self._write_fasta(sequence, fasta_path, idx)
-
-        cmd = [
-            self.env_python,
-            os.path.join(self.trrosetta_dir, "predict.py"),
-            "--input", fasta_path,
-            "--output", pdb_output_dir,
-        ]
-        subprocess.run(cmd, check=True, capture_output=True, cwd=self.trrosetta_dir)
-
-        import glob
-        candidates = glob.glob(os.path.join(pdb_output_dir, "*.pdb"))
-        if not candidates:
-            raise FileNotFoundError(f"trRosettaRNA produced no PDB output in {pdb_output_dir}")
-
-        coords = self._pdb_to_c4p_coords(candidates[0])
-
-        if os.path.exists(fasta_path):
-            os.unlink(fasta_path)
-
-        return coords
-
-
-class RemoteOracleClient(BaseOracle):
-    """Connects to a remote oracle server over a TCP socket."""
-
-    def __init__(self, address_file: str):
-        self.address_file = address_file
-        self._host = None
-        self._port = None
-
-    def _get_address(self):
-        if self._host is None:
-            with open(self.address_file) as f:
-                host, port = f.read().strip().split(":")
-            self._host = host
-            self._port = int(port)
-
-    def fold(self, sequence: str, output_dir: str, idx: int = 0) -> torch.Tensor:
-        self._get_address()
-
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.connect((self._host, self._port))
-            s.sendall(pickle.dumps(sequence))
-            s.shutdown(socket.SHUT_WR)
-
-            data = b""
-            while True:
-                chunk = s.recv(4096)
-                if not chunk:
-                    break
-                data += chunk
-
-        coords = pickle.loads(data)
-        return torch.tensor(coords, dtype=torch.float32)
 
 
 def get_oracle(oracle_type: str, cfg) -> BaseOracle:
@@ -315,25 +212,8 @@ def get_oracle(oracle_type: str, cfg) -> BaseOracle:
             gpu_id=cfg.af3_gpu,
         )
 
-    elif oracle_type == "drfold2":
-        return DRfold2Oracle(
-            drfold2_dir=cfg.drfold2_dir,
-            env_python=cfg.drfold2_python,
-        )
-
-    elif oracle_type == "trrosettarna":
-        return TrRosettaRNAOracle(
-            trrosetta_dir=cfg.trrosetta_dir,
-            env_python=cfg.trrosetta_python,
-        )
-
-    elif oracle_type == "remote":
-        return RemoteOracleClient(
-            address_file=cfg.oracle_address_file
-        )
-
     else:
         raise ValueError(f"Unknown oracle type: {oracle_type}. "
-                         f"Choose from: rhofold, alphafold3, drfold2, trrosettarna")
+                         f"Choose from: rhofold, alphafold3")
 
 
